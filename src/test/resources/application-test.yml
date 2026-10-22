@@ -1,0 +1,24 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:conecta;DB_CLOSE_DELAY=-1;MODE=PostgreSQL
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+  flyway:
+    enabled: false
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:schema.sql
+security:
+  jwt:
+    jwk-set-uri: http://localhost:9000/oauth2/jwks
+    issuer: https://auth.conectasaude.local
+    audience: agendamento-service
+feature:
+  teleconsulta:
+    enabled: true
