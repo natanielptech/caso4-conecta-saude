@@ -2,6 +2,8 @@ package br.com.conectasaude.agendamento.acesso;
 
 import java.util.UUID;
 import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 
@@ -10,12 +12,12 @@ public record UsuarioAutenticado(UUID id, String papel, UUID clinicaId) {
         var jwt = authentication.getToken();
         UUID id = UUID.fromString(jwt.getSubject());
         List<String> roles = jwt.getClaimAsStringList("roles");
-        String papel = (roles == null ? List.<String>of() : roles).stream()
+        Set<String> papeis = (roles == null ? List.<String>of() : roles).stream()
                 .map(role -> role.startsWith("ROLE_") ? role.substring(5) : role)
                 .filter(role -> role.equals("PACIENTE") || role.equals("CLINICA"))
-                .findFirst()
-                .orElse("");
-        String clinica = jwt.getClaimAsString("clinic_id");
+                .collect(Collectors.toSet());
+        String papel = papeis.size() == 1 ? papeis.iterator().next() : "";
+        String clinica = "CLINICA".equals(papel) ? jwt.getClaimAsString("clinic_id") : null;
         return new UsuarioAutenticado(id, papel, clinica == null ? null : UUID.fromString(clinica));
     }
 }

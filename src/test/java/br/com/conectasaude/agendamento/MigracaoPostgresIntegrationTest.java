@@ -32,14 +32,19 @@ class MigracaoPostgresIntegrationTest {
     private JdbcTemplate jdbc;
 
     @Test
-    void auditoriaRejeitaAtualizacoes() {
-        jdbc.update("INSERT INTO auditoria (quem, recurso, resultado, quando) VALUES ('teste', 'consulta', 'PERMITIDO', CURRENT_TIMESTAMP)");
-        boolean rejeitou = false;
+    void auditoriaRejeitaAtualizacoesERemocoes() {
+        jdbc.update("INSERT INTO auditoria (quem, recurso, resultado, quando) VALUES ('teste-update', 'consulta', 'PERMITIDO', CURRENT_TIMESTAMP)");
+        jdbc.update("INSERT INTO auditoria (quem, recurso, resultado, quando) VALUES ('teste-delete', 'consulta', 'PERMITIDO', CURRENT_TIMESTAMP)");
+        assertTrue(rejeita("UPDATE auditoria SET resultado = 'NEGADO' WHERE quem = 'teste-update'"));
+        assertTrue(rejeita("DELETE FROM auditoria WHERE quem = 'teste-delete'"));
+    }
+
+    private boolean rejeita(String sql) {
         try {
-            jdbc.update("UPDATE auditoria SET resultado = 'NEGADO' WHERE quem = 'teste'");
+            jdbc.update(sql);
+            return false;
         } catch (RuntimeException exception) {
-            rejeitou = true;
+            return true;
         }
-        assertTrue(rejeitou);
     }
 }

@@ -9,8 +9,11 @@ spring:
       ddl-auto: validate
     open-in-view: false
   flyway:
-    enabled: true
-    target: 3
+    enabled: false
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:schema.sql
 security:
   jwt:
     jwk-set-uri: http://localhost:9000/oauth2/jwks
