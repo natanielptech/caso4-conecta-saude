@@ -1,0 +1,26 @@
+spring:
+  application:
+    name: agendamento-service
+  datasource:
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/conecta_saude}
+    username: ${DATABASE_USERNAME:conecta}
+    password: ${DATABASE_PASSWORD:conecta}
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+  flyway:
+    enabled: true
+security:
+  jwt:
+    jwk-set-uri: ${JWT_JWK_SET_URI:http://localhost:9000/oauth2/jwks}
+    issuer: ${JWT_ISSUER:https://auth.conectasaude.local}
+    audience: ${JWT_AUDIENCE:agendamento-service}
+rate-limit:
+  requests-per-minute: ${RATE_LIMIT_REQUESTS_PER_MINUTE:100}
+feature:
+  teleconsulta:
+    enabled: ${FEATURE_TELECONSULTA_ENABLED:false}
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
