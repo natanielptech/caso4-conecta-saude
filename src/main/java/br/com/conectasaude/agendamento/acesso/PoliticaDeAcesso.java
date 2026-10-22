@@ -20,7 +20,7 @@ public class PoliticaDeAcesso {
 
     @Transactional
     public Consulta exigirAcessoAConsulta(UUID consultaId, UsuarioAutenticado usuario) {
-        Consulta consulta = consultas.findById(consultaId).orElse(null);
+        Consulta consulta = consultas.findWithPacienteById(consultaId).orElse(null);
         boolean permitido = consulta != null && possuiAcesso(consulta, usuario);
         auditoria.registrar(usuario.id().toString(), "consulta:" + consultaId, permitido);
         if (!permitido) {

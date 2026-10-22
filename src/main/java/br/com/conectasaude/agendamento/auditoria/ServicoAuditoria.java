@@ -4,6 +4,7 @@ import java.time.Instant;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.Propagation;
 
 @Service
 public class ServicoAuditoria {
@@ -13,7 +14,7 @@ public class ServicoAuditoria {
         this.repository = repository;
     }
 
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void registrar(String usuarioId, String recurso, boolean permitido) {
         repository.save(new Auditoria(
                 usuarioId == null ? "anonimo" : usuarioId,

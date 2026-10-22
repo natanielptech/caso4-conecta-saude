@@ -3,6 +3,9 @@ package br.com.conectasaude.agendamento.consulta;
 import java.time.Instant;
 import java.util.UUID;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
+
+@JsonInclude(JsonInclude.Include.NON_NULL)
 public record ConsultaResponse(
         UUID id,
         String nomePaciente,
