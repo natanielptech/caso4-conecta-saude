@@ -1,6 +1,7 @@
 package br.com.conectasaude.agendamento;
 
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -109,7 +110,7 @@ class ConsultaAutorizacaoIntegrationTest {
                 .audience(List.of("agendamento-service")));
         String convite = mockMvc.perform(
                         org.springframework.test.web.servlet.request.MockMvcRequestBuilders
-                                .post("/v2/consultas/{id}/sala", consultaA).with(jwt))
+                                        .post("/v2/consultas/{id}/sala", consultaA).with(jwt).with(csrf()))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         String token = objectMapper.readTree(convite).get("tokenUsoUnico").asText();
@@ -119,7 +120,8 @@ class ConsultaAutorizacaoIntegrationTest {
                 .post("/v2/salas/acessar")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(request)
-                .with(jwt);
+                .with(jwt)
+                .with(csrf());
         mockMvc.perform(acesso).andExpect(status().isOk());
         mockMvc.perform(acesso).andExpect(status().isNotFound());
     }

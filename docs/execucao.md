@@ -19,6 +19,7 @@ O provedor JWT precisa emitir `sub` com o UUID do usuário, `roles` com `PACIENT
 - `POST /v2/consultas/{id}/sala`: convite temporário de uso único; desabilitado por padrão.
 - `POST /v2/salas/acessar`: resgata convite com o mesmo JWT do paciente.
 - `/swagger-ui.html`: documentação OpenAPI.
+- `GET /csrf`: retorna o token CSRF; inclua `X-CSRF-TOKEN` nas requisições de alteração (POST/PUT/PATCH/DELETE).
 
 Use `FEATURE_TELECONSULTA_ENABLED=true` para habilitar a funcionalidade. Os convites deste protótipo ficam em memória; em implantação com múltiplas instâncias, substitua o armazenamento por mecanismo compartilhado com consumo atômico.
 
