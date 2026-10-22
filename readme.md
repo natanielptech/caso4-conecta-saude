@@ -1,95 +1,210 @@
-# ConectaSaúde — Segurança, Testes e Evolução de APIs e Serviços
+# ConectaSaúde — serviço de agendamento
 
-> Este README é a especificação funcional e arquitetural para implementação de uma aplicação baseada no estudo de caso da Aula 4 (Unidade 4). Ele **não contém código** — a implementação deve ser feita por outra IA/desenvolvedor a partir destas instruções.
+Este repositório contém um **protótipo didático de uma API segura para consultas e teleconsultas**. O foco é mostrar, na prática, autorização em nível de objeto (BOLA), evolução de API, auditoria, feature flags e migrações de banco.
 
-## Stack obrigatória
+> **Importante:** o código implementa o serviço de agendamento deste estudo de caso, não a plataforma completa da ConectaSaúde. Não há integração real com clínicas, prontuário, faturamento, provedor de vídeo ou provedor de identidade. A sala de teleconsulta é representada por um convite temporário em memória.
 
-- **Linguagem: Java** (17 ou 21 LTS)
-- **Framework: Spring Boot 3.x**, com **Spring Security** (OAuth2 Resource Server / validação de JWT)
-- Build: Maven ou Gradle
-- Migrações de banco: **Flyway** ou Liquibase (obrigatório para o padrão expandir/contrair)
-- Documentação de API: springdoc-openapi
-- Testes: JUnit 5 + Spring Boot Test + Testcontainers (integração); REST Assured ou MockMvc (contrato/e2e); ArchUnit é opcional aqui
-- Auditoria: uma tabela/log de auditoria **append-only** (nunca UPDATE/DELETE)
+## O que o serviço faz hoje
 
-## Contexto de negócio
+- Autentica chamadas por JWT validado como OAuth2 Resource Server.
+- Permite consultar uma consulta pela API v1 ou v2, depois de verificar se o paciente ou a clínica tem acesso àquele registro.
+- Registra os resultados dessas verificações na tabela de auditoria.
+- Cria e resgata convites de uso único para teleconsulta, quando a feature flag está habilitada.
+- Aplica um limite básico de requisições por endereço IP.
+- Documenta a API com OpenAPI/Swagger e mantém testes unitários e de integração com MockMvc.
 
-A ConectaSaúde conecta pacientes a cerca de 2.400 clínicas. Pacientes agendam consultas e teleconsultas e acessam orientações/prescrições pelo aplicativo; clínicas se integram via API pública B2B. Por lidar com dados de saúde (LGPD), a plataforma é auditada periodicamente.
+### Visão da arquitetura
 
-**O achado que motiva o caso:** um teste de intrusão revelou uma falha de **Broken Object Level Authorization (BOLA)** — um paciente autenticado, ao trocar o identificador na URL (`GET /v1/consultas/88213` → `/v1/consultas/88214`), conseguia ver dados de consulta de **outro paciente**. O token era validado (autenticação), mas não havia verificação de que o usuário tinha direito àquele objeto específico (autorização).
+```mermaid
+flowchart LR
+    Cliente["Aplicativo ou cliente B2B"] -->|"HTTPS + JWT"| API["agendamento-service<br/>Spring Boot"]
+    API --> Filtro["RateLimitFilter<br/>limite por IP"]
+    Filtro --> Seguranca["Spring Security<br/>validação do JWT"]
+    Seguranca --> Controllers["Controllers REST"]
+    Controllers --> Politica["PoliticaDeAcesso<br/>autorização por consulta"]
+    Politica --> Repositorio["ConsultaRepository"]
+    Repositorio --> Banco[("PostgreSQL<br/>consultas e pacientes")]
+    Politica --> Auditoria["ServicoAuditoria"]
+    Auditoria --> BancoAudit[("PostgreSQL<br/>auditoria append-only")]
+    Controllers --> Sala["SalaTeleconsultaService<br/>convites em memória"]
+    API -.->|"OpenAPI"| Swagger["/swagger-ui.html"]
+```
 
-## Serviço a construir
+## Requisitos e execução local
 
-**agendamento-service** — serviço principal, onde todos os requisitos abaixo devem ser implementados. Os serviços de Prontuário e Faturamento (mencionados no caso) podem ser representados como stubs simples ou omitidos, desde que o foco de Agendamento esteja completo.
+Você precisa de **Java 17 ou superior**, **Maven** e **PostgreSQL 14 ou superior**. Crie previamente um banco chamado `conecta_saude` e um usuário com permissão de acesso. As migrações Flyway são executadas ao iniciar o serviço.
 
-## Requisito de segurança central — Autorização em nível de objeto (obrigatório, não negociável)
+Configure a conexão e os dados esperados do provedor JWT. Os valores de banco mostrados abaixo são exemplos locais; substitua-os pelos da sua instalação:
 
-Todo endpoint que recebe um identificador de recurso deve:
+```sh
+export DATABASE_URL=jdbc:postgresql://localhost:5432/conecta_saude
+export DATABASE_USERNAME=conecta
+export DATABASE_PASSWORD='sua-senha-local'
+export JWT_JWK_SET_URI=https://seu-provedor/.well-known/jwks.json
+export JWT_ISSUER=https://seu-provedor/
+export JWT_AUDIENCE=agendamento-service
 
-1. Obter o identificador do **usuário autenticado a partir do token** (JWT), nunca de um parâmetro enviado pelo cliente
-2. Verificar se o usuário tem direito **àquele objeto específico** (ex. `consulta.pacienteId == usuarioDoToken.id`, ou `consulta.clinicaId == usuarioDoToken.clinicaId` para usuários de clínica)
-3. Se não tiver direito, responder **`404 Not Found`** (não `403 Forbidden`) — para não revelar a existência do recurso a quem não tem acesso a ele
-4. Registrar a tentativa negada na auditoria
+mvn spring-boot:run
+```
 
-Esta regra deve ser implementada de forma **centralizada** (ex. um componente `PoliticaDeAcesso` reutilizado por todos os endpoints), não repetida manualmente em cada controller.
+O token deve conter:
 
-## Modelagem de ameaças (STRIDE) — referência para o fluxo de teleconsulta
-
-| Categoria | Ameaça | Mitigação esperada |
-|---|---|---|
-| Falsificação (Spoofing) | Terceiro entra na sala de vídeo com link vazado | Link de uso único, vinculado ao token do paciente |
-| Adulteração (Tampering) | Alteração da prescrição em trânsito | TLS em toda a comunicação + assinatura digital da prescrição |
-| Repúdio (Repudiation) | Profissional nega ter emitido uma prescrição | Registro de auditoria imutável, com autor e horário |
-| Divulgação (Information disclosure) | Gravação da consulta acessível por URL pública | Armazenamento privado + URLs assinadas com expiração curta |
-| Negação de serviço | Excesso de salas abertas por um único cliente | Limite de sessões simultâneas por clínica |
-| Elevação de privilégio | Paciente aciona endpoint exclusivo de profissionais | Verificação de papel (role) por rota |
-
-## Riscos do OWASP API Security Top 10 (2023) a mitigar
-
-| Risco | Mitigação obrigatória no projeto |
+| Claim | Uso |
 |---|---|
-| API1 Broken Object Level Authorization | Ver seção "Autorização em nível de objeto" acima |
-| API2 Broken Authentication | Tokens JWT com expiração curta e validação de assinatura/emissor/público |
-| API3 Broken Object Property Level Authorization | DTOs de resposta explícitos, nunca devolver a entidade completa (ex. nunca expor CPF completo — ver seção de evolução de API) |
-| API4 Unrestricted Resource Consumption | Rate limiting básico por cliente/token |
-| API5 Broken Function Level Authorization | Endpoints administrativos protegidos por verificação de escopo/role |
-| API9 Improper Inventory Management | Versões antigas de API devem ser rastreadas e desligadas (ver seção de evolução) |
+| `sub` | UUID do usuário autenticado |
+| `roles` | Papel `PACIENTE` ou `CLINICA` |
+| `clinic_id` | UUID da clínica, obrigatório para chamadas como clínica |
+| `iss` e `aud` | Validação do emissor e do público esperados |
+| `iat` e `exp` | Validação de validade e duração máxima de 15 minutos |
 
-## Pirâmide de testes exigida
+As chaves públicas para verificar a assinatura são obtidas do endereço configurado em `JWT_JWK_SET_URI`. Em ambiente real, configure TLS no proxy/ingress e use segredos próprios para o ambiente — não coloque credenciais no repositório.
 
-| Camada | O que verifica | Ferramenta sugerida |
+## Endpoints disponíveis
+
+| Método e rota | O que faz | Observações |
 |---|---|---|
-| Unitário | Regras isoladas (ex. a lógica de `PoliticaDeAcesso`) | JUnit 5 |
-| Integração | Serviço com banco real | `@SpringBootTest` + Testcontainers |
-| Contrato | Compatibilidade entre consumidor e provedor | Pact ou Spring Cloud Contract |
-| Ponta a ponta | Poucos fluxos críticos completos | REST Assured / MockMvc |
+| `GET /v1/consultas/{id}` | Retorna a consulta com CPF completo | Legada; responde com `Deprecation` e `Sunset` |
+| `GET /v2/consultas/{id}` | Retorna a consulta com CPF mascarado | Versão recomendada |
+| `POST /v2/consultas/{id}/sala` | Cria convite temporário de teleconsulta | Requer feature flag ligada e acesso à consulta |
+| `POST /v2/salas/acessar` | Resgata o convite e retorna os dados da sala | O mesmo paciente autenticado só pode resgatá-lo uma vez |
+| `GET /csrf` | Obtém o token CSRF | Envie-o no header `X-CSRF-TOKEN` nas requisições de alteração |
+| `/swagger-ui.html` | Abre a documentação interativa | `/v3/api-docs` fornece o documento OpenAPI |
 
-**Teste de regressão de segurança obrigatório:** criar dois pacientes de teste; confirmar que o paciente A, autenticado, recebe `404` ao tentar `GET /v1/consultas/{id}` de uma consulta do paciente B, e que a tentativa gera um registro de auditoria.
+As rotas de consulta retornam apenas uma consulta por identificador; o projeto **não implementa neste momento** cadastro, criação ou listagem de agendamentos.
 
-## Evolução de API — obrigatório
+## Fluxo principal: autorização contra BOLA
 
-- Implementar **v1** (expõe `cpf` completo — já marcada como obsoleta) e **v2** (expõe `cpfMascarado`), **coexistindo**
-- Respostas da v1 devem incluir os headers HTTP `Deprecation` e `Sunset`
-- **Feature flag** para liberar uma nova funcionalidade (ex. sala de teleconsulta) gradualmente — pode ser implementada com uma configuração simples (ex. propriedade de aplicação lida em runtime) ou uma biblioteca de feature flags; toda flag deve ter um responsável e uma data de remoção documentados
-- **Padrão expandir e contrair** (expand/contract) para uma mudança de esquema incompatível — usar como exercício a separação do campo `nome` em `nome_social` e `nome_civil`, implementada em **4 migrações Flyway separadas**:
+Autenticação responde “quem está fazendo a chamada?”. Autorização em nível de objeto responde “essa pessoa pode acessar **esta consulta**?”. Validar o JWT não substitui a segunda verificação.
 
-| Etapa | Script | O que muda | Versões que funcionam |
-|---|---|---|---|
-| 1. Expandir | `V1__expandir_nome.sql` | Cria as novas colunas; aplicação grava nas antigas e nas novas | Antiga e nova |
-| 2. Migrar | `V2__migrar_nome.sql` | Copia registros existentes para as novas colunas em lotes | Antiga e nova |
-| 3. Alternar | (mudança de código, não SQL) | Aplicação passa a ler apenas das novas colunas | Só a nova |
-| 4. Contrair | `V3__remover_nome_antigo.sql` | Remove as colunas antigas, após a janela de reversão | Só a nova |
+```mermaid
+sequenceDiagram
+    actor Cliente
+    participant Seguranca as Spring Security
+    participant Controller as ConsultaController
+    participant Politica as PoliticaDeAcesso
+    participant Banco as PostgreSQL
+    participant Auditoria as ServicoAuditoria
 
-## Auditoria e ADR — obrigatório
+    Cliente->>Seguranca: GET /v2/consultas/{id} + JWT
+    Seguranca->>Seguranca: valida assinatura, emissor, público e validade
+    alt JWT inválido ou ausente
+        Seguranca-->>Cliente: 401 Unauthorized
+    else JWT válido
+        Seguranca->>Controller: identidade autenticada
+        Controller->>Politica: exigir acesso ao ID usando claims do JWT
+        Politica->>Banco: busca consulta e paciente
+        Politica->>Politica: compara pacienteId ou clinicaId com o token
+        Politica->>Auditoria: registra permitido ou negado
+        alt Consulta acessível
+            Politica-->>Controller: consulta autorizada
+            Controller-->>Cliente: 200 OK + DTO da v2 (CPF mascarado)
+        else Consulta inexistente ou sem acesso
+            Politica-->>Controller: RecursoNaoEncontradoException
+            Controller-->>Cliente: 404 Not Found
+        end
+    end
+```
 
-- Tabela de auditoria imutável: `quem` (id do usuário), `o quê` (recurso acessado), `quando` (timestamp), `resultado` (permitido/negado)
-- Incluir no repositório um arquivo `docs/adr/ADR-001-autorizacao-nivel-objeto.md` documentando a decisão de autorização em nível de objeto: contexto, decisão, alternativas rejeitadas (ex. "regra só no gateway" — rejeitada porque o gateway não conhece a relação usuário-dado) e consequências
+O serviço responde `404` tanto para um recurso inexistente quanto para um recurso sem autorização, evitando revelar sua existência. A decisão é centralizada em `PoliticaDeAcesso`, e o identificador do usuário vem do `sub` assinado, não de um parâmetro controlado pelo cliente.
 
-## Critérios de aceite
+## Fluxo de teleconsulta
 
-- [ ] Teste de regressão de BOLA presente e passando (paciente A não acessa consulta de paciente B → `404` + auditoria registrada)
-- [ ] v1 retorna `cpf` com headers `Deprecation`/`Sunset`; v2 retorna `cpfMascarado`
-- [ ] Pelo menos uma feature flag implementada com responsável/data de remoção documentados
-- [ ] As 4 etapas de expand/contract implementadas como migrações Flyway distintas e reversíveis
-- [ ] Tabela de auditoria populada em cada leitura/alteração de dado sensível
-- [ ] ADR documentado em `docs/adr/`
+```mermaid
+sequenceDiagram
+    actor Paciente
+    participant API as agendamento-service
+    participant Politica as PoliticaDeAcesso
+    participant Sala as SalaTeleconsultaService
+
+    Paciente->>API: POST /v2/consultas/{id}/sala + JWT + CSRF
+    API->>Politica: verifica acesso do paciente à consulta
+    Politica-->>API: consulta autorizada
+    API->>Sala: solicita criação do convite
+    alt Feature flag desligada ou limite atingido
+        Sala-->>Paciente: 404 ou 429
+    else Convite criado
+        Sala-->>Paciente: token de uso único + expiração (5 min)
+        Paciente->>API: POST /v2/salas/acessar + mesmo JWT + CSRF
+        API->>Sala: resgata token
+        alt Token válido e pertencente ao paciente
+            Sala-->>Paciente: dados da sala
+            Note over Sala: O convite é consumido
+        else Token inválido, expirado ou já consumido
+            Sala-->>Paciente: 404 Not Found
+        end
+    end
+```
+
+O convite é armazenado **em memória**, expira em cinco minutos e só pode ser resgatado pelo paciente ao qual foi vinculado. O limite padrão é de três convites simultâneos por clínica. Como o armazenamento não é compartilhado, convites não são adequados para múltiplas instâncias nem persistem após reiniciar o serviço. O projeto não cria uma conexão de vídeo real.
+
+Para habilitar a funcionalidade:
+
+```sh
+export FEATURE_TELECONSULTA_ENABLED=true
+```
+
+A flag tem responsável e data de remoção documentados em [`docs/feature-flags.md`](docs/feature-flags.md).
+
+## Segurança e auditoria
+
+- **JWT:** valida assinatura por JWKS, emissor, público, timestamps e duração máxima de 15 minutos.
+- **Autorização por objeto:** pacientes acessam somente suas consultas; usuários `CLINICA` acessam apenas consultas da clínica indicada em `clinic_id`.
+- **CSRF:** obtenha o token em `GET /csrf` e envie `X-CSRF-TOKEN` em `POST`, `PUT`, `PATCH` e `DELETE`.
+- **Rate limiting:** padrão de 100 requisições por minuto por endereço IP, configurável por `RATE_LIMIT_REQUESTS_PER_MINUTE`. O contador é local à instância.
+- **Dados de resposta:** DTOs separados mantêm o CPF completo na v1 e o CPF mascarado na v2.
+- **Auditoria:** a autorização registra acesso permitido ou negado; convites também geram registros. A migração `V4` impede `UPDATE` e `DELETE` na tabela de auditoria no PostgreSQL.
+
+O rate limiting e os convites são implementações simples para o protótipo: não são distribuídos entre instâncias. A regra de auditoria cobre os fluxos descritos acima, e não deve ser interpretada como auditoria completa de toda operação futura.
+
+Para mais contexto da decisão de autorização, consulte [`docs/adr/ADR-001-autorizacao-nivel-objeto.md`](docs/adr/ADR-001-autorizacao-nivel-objeto.md).
+
+## Evolução do esquema: expandir e contrair
+
+As migrações mostram a separação do nome antigo em `nome_civil` e `nome_social`:
+
+```mermaid
+flowchart LR
+    V0["V0: esquema inicial<br/>nome"] --> V1["V1: expandir<br/>adiciona nome_civil e nome_social"]
+    V1 --> V2["V2: migrar<br/>copia nome para nome_civil em lotes"]
+    V2 --> App["Código atual<br/>usa os novos campos"]
+    App --> V3["V3: contrair<br/>remove nome antigo"]
+    V3 --> V4["V4: proteger auditoria<br/>bloqueia UPDATE e DELETE"]
+```
+
+| Migração | Etapa | Efeito |
+|---|---|---|
+| `V0__schema_inicial.sql` | Esquema inicial | Cria pacientes, consultas e auditoria com o campo `nome` |
+| `V1__expandir_nome.sql` | Expandir | Adiciona `nome_civil` e `nome_social` |
+| `V2__migrar_nome.sql` | Migrar | Copia o nome existente para `nome_civil` em lotes de até 1.000 registros |
+| `V3__remover_nome_antigo.sql` | Contrair | Remove a coluna `nome` antiga |
+| `V4__proteger_auditoria.sql` | Proteção | Impede alterações e exclusões na auditoria |
+
+O código atual lê os novos campos. Em implantação real, as etapas precisam ser coordenadas com as versões da aplicação e com backup; veja [`docs/execucao.md`](docs/execucao.md) antes de planejar uma reversão.
+
+## Testes
+
+Execute a suíte existente com:
+
+```sh
+mvn test
+```
+
+Os testes usam H2 em memória e MockMvc, sem exigir PostgreSQL ou um provedor JWT real. Eles cobrem, entre outros cenários:
+
+- tentativa de BOLA: paciente A recebe `404` ao acessar a consulta de B e a tentativa negada é auditada;
+- diferenças entre CPF da v1 e CPF mascarado da v2, incluindo os headers de depreciação;
+- convite de teleconsulta vinculado ao paciente e consumido uma única vez;
+- presença das versões da API na especificação OpenAPI.
+
+## Onde encontrar cada parte
+
+| Caminho | Conteúdo |
+|---|---|
+| `src/main/java/.../consulta` | Entidade, repositório, controller e DTOs de consulta |
+| `src/main/java/.../acesso` | Identidade do JWT, política de acesso e resposta `404` |
+| `src/main/java/.../auditoria` | Registro e persistência da auditoria |
+| `src/main/java/.../teleconsulta` | Endpoints e serviço de convites |
+| `src/main/java/.../config` | Segurança, CSRF, OpenAPI e rate limiting |
+| `src/main/resources/db/migration` | Migrações Flyway |
+| `src/test/java` | Testes de integração e contrato |
+| `docs/` | Instruções adicionais, feature flags e ADR |
